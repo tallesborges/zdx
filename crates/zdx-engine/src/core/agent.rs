@@ -1122,9 +1122,31 @@ fn strip_invalid_images(messages: &mut [ChatMessage], err: &ProviderError) -> bo
     messages.iter_mut().any(strip_images_from_message)
 }
 
-/// True when a tool-result JSON envelope carries a worker thread id, either
-/// at the top level (`create_thread`) or under `worker` (`send_thread_message`),
-/// inside or outside the envelope's `data` object.
+/// Tools whose successful result proves this turn started or reached work in
+/// another thread.
+const DISPATCH_TOOLS: &[&str] = &["create_thread", "send_thread_message", "invoke_subagent"];
+
+/// Appended to a final answer that claims work started when this turn
+/// dispatched nothing. It is persisted with the answer, so the next turn sees
+/// it too.
+const UNBACKED_DISPATCH_CORRECTION: &str = "Correction from ZDX: nothing was started. This turn \
+     made no create_thread, send_thread_message, or invoke_subagent call, so no new work is \
+     running for this request. Ask again to start it.";
+
+/// True when the turn offers `create_thread`. Only such turns (the
+/// orchestrator's) can start a worker, so only they get the unbacked-dispatch
+/// check. Workers, helpers, and jobs report on work other threads did; their
+/// text stays untouched.
+fn offers_worker_dispatch(enabled_tools: &HashSet<String>) -> bool {
+    enabled_tools
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("create_thread"))
+}
+
+/// True when a tool-result JSON envelope names the thread the call started or
+/// reached: `thread_id` (`create_thread`), `worker.thread_id`
+/// (`send_thread_message`), or `child_thread_id` (`invoke_subagent`), inside
+/// or outside the envelope's `data` object.
 fn json_carries_thread_id(text: &str) -> bool {
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return false;
@@ -1135,6 +1157,7 @@ fn json_carries_thread_id(text: &str) -> bool {
         .flat_map(|object| {
             [
                 object.get("thread_id"),
+                object.get("child_thread_id"),
                 object
                     .get("worker")
                     .and_then(|worker| worker.get("thread_id")),
@@ -1143,23 +1166,22 @@ fn json_carries_thread_id(text: &str) -> bool {
         .any(|id| id.and_then(Value::as_str).is_some_and(|id| !id.is_empty()))
 }
 
-/// True when history shows a worker dispatch: a `create_thread` or
-/// `send_thread_message` call whose result returned a new thread id.
+/// True when `turn_messages` (this turn's messages only) hold a dispatch: a
+/// [`DISPATCH_TOOLS`] call whose result returned a thread id.
 ///
-/// This is the only evidence a worker was started. Model text claiming a
-/// dispatch without it describes a worker that does not exist.
-fn has_worker_dispatch(messages: &[ChatMessage]) -> bool {
+/// Older dispatches in the thread do not count: they prove nothing about
+/// what this turn started.
+fn has_worker_dispatch(turn_messages: &[ChatMessage]) -> bool {
     let mut dispatch_ids: HashSet<String> = HashSet::new();
-    for message in messages {
+    for message in turn_messages {
         let MessageContent::Blocks(blocks) = &message.content else {
             continue;
         };
         for block in blocks {
             if let ChatContentBlock::ToolUse { id, name, .. } = block
-                && matches!(
-                    name.to_ascii_lowercase().as_str(),
-                    "create_thread" | "send_thread_message"
-                )
+                && DISPATCH_TOOLS
+                    .iter()
+                    .any(|tool| name.eq_ignore_ascii_case(tool))
             {
                 dispatch_ids.insert(id.clone());
             }
@@ -1168,7 +1190,7 @@ fn has_worker_dispatch(messages: &[ChatMessage]) -> bool {
     if dispatch_ids.is_empty() {
         return false;
     }
-    messages.iter().any(|message| {
+    turn_messages.iter().any(|message| {
         let MessageContent::Blocks(blocks) = &message.content else {
             return false;
         };
@@ -1181,87 +1203,195 @@ fn has_worker_dispatch(messages: &[ChatMessage]) -> bool {
     })
 }
 
-/// True when one sentence claims a worker was started or relaunched.
-///
-/// Deliberately narrow: negations and conditionals are not claims, and a
-/// sentence must name a worker and a start verb together.
-fn is_worker_started_claim(sentence: &str) -> bool {
-    const NOT_CLAIMS: &[&str] = &[
-        "no worker",
-        "no new worker",
-        "not started",
-        "didn't start",
-        "did not start",
-        "hasn't started",
-        "haven't started",
-        "never started",
-        "without starting",
-        "failed to start",
-        "unable to start",
-        "if i started",
-        "if a worker",
-    ];
-    let lower = sentence.to_lowercase();
-    if NOT_CLAIMS.iter().any(|phrase| lower.contains(phrase)) {
-        return false;
-    }
-    let names_worker = lower.contains("worker") || lower.contains("subagent");
-    let starts_worker = [
-        "started",
-        "starting",
-        "launched",
-        "spawned",
-        "restarted",
-        "kicked off",
-        "new worker",
-        "fresh worker",
-    ]
-    .iter()
-    .any(|phrase| lower.contains(phrase));
-    names_worker && starts_worker
+/// Phrases that make a sentence a negation, a condition, or an offer, not a
+/// claim that work started. Matched on the lowercased sentence padded with
+/// spaces.
+const NOT_CLAIMS: &[&str] = &[
+    "no worker",
+    "no new worker",
+    "not started",
+    "didn't start",
+    "did not start",
+    "hasn't started",
+    "haven't started",
+    "never started",
+    "nothing was started",
+    "nothing started",
+    "without starting",
+    "failed to start",
+    "unable to start",
+    " if i ",
+    " if a ",
+    " if you ",
+    " i can ",
+    " can start ",
+    " could start ",
+    " should i ",
+    " shall i ",
+    " want me to ",
+    " would you like ",
+];
+
+/// Verbs that open a sentence announcing work as under way ("Retrying the
+/// fix now.", "Installing the new bundle on r11.").
+const ACTION_OPENERS: &[&str] = &[
+    "starting",
+    "restarting",
+    "retrying",
+    "rerunning",
+    "re-running",
+    "making",
+    "installing",
+    "reinstalling",
+    "building",
+    "rebuilding",
+    "fixing",
+    "running",
+    "launching",
+    "relaunching",
+    "spawning",
+    "dispatching",
+    "delegating",
+    "kicking off",
+    "creating",
+    "applying",
+    "deploying",
+    "remoting",
+    "porting",
+    "pushing",
+    "committing",
+];
+
+/// Words after an action verb that make the sentence a status report
+/// ("Running for 41 min", "Building since 20:22"), not an announcement.
+const STATUS_WORDS: &[&str] = &[
+    "for", "since", "until", "at", "in", "as", "fine", "smoothly", "still", "slowly", "well",
+];
+
+/// Filler that can open a reply before the real first sentence ("On it —
+/// starting …").
+const FILLER_OPENERS: &[&str] = &["on it", "okay", "ok", "got it", "sure", "yes", "right"];
+
+/// Verbs that, after a present-perfect first-person subject ("I've
+/// started"), claim a dispatch this reply made. Plain past tense ("the worker
+/// I started") is left alone: it usually refers to an earlier turn.
+const DONE_VERBS: &[&str] = &[
+    "started",
+    "launched",
+    "spawned",
+    "kicked off",
+    "restarted",
+    "dispatched",
+    "delegated",
+    "queued",
+    "created",
+];
+
+/// Lowercases a sentence and drops Markdown emphasis, heading, quote, and
+/// list markers around it.
+fn normalize_sentence(sentence: &str) -> String {
+    sentence
+        .trim()
+        .trim_start_matches(|c: char| {
+            matches!(c, '*' | '_' | '#' | '>' | '-' | '`') || c.is_whitespace()
+        })
+        .trim_end_matches(|c: char| matches!(c, '*' | '_' | '`') || c.is_whitespace())
+        .to_lowercase()
 }
 
-/// Drops worker-started claims from `text` when no dispatch backs them.
-///
-/// Sentences that claim a start are removed; every other sentence is kept.
-/// When nothing remains, a single correction sentence takes their place, so
-/// the turn never ends claiming a worker that was never started.
-fn suppress_unbacked_worker_claims(text: &str, backed: bool) -> String {
-    if backed || text.is_empty() {
-        return text.to_string();
+/// Removes a filler opener ("on it —", "ok,") from a normalized sentence.
+fn strip_filler(sentence: &str) -> &str {
+    for filler in FILLER_OPENERS {
+        if let Some(rest) = sentence.strip_prefix(filler)
+            && rest.chars().next().is_none_or(|c| !c.is_alphanumeric())
+        {
+            return rest.trim_start_matches(|c: char| {
+                matches!(c, '—' | '–' | '-' | ',' | ':' | '.' | '!' | '*') || c.is_whitespace()
+            });
+        }
     }
-    let mut kept_lines: Vec<String> = Vec::new();
+    sentence
+}
+
+/// Splits text into sentences at `.`, `!`, or `?` followed by whitespace or
+/// the end, and at line breaks.
+fn sentences(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
     for line in text.lines() {
-        let chars: Vec<char> = line.chars().collect();
-        let mut chunks: Vec<String> = Vec::new();
-        let mut chunk = String::new();
-        for (index, ch) in chars.iter().enumerate() {
-            chunk.push(*ch);
-            let at_boundary = chars.get(index + 1).is_none_or(|next| next.is_whitespace());
+        let mut start = 0;
+        let mut chars = line.char_indices().peekable();
+        while let Some((index, ch)) = chars.next() {
+            let at_boundary = chars.peek().is_none_or(|(_, next)| next.is_whitespace());
             if matches!(ch, '.' | '!' | '?') && at_boundary {
-                chunks.push(std::mem::take(&mut chunk));
+                let end = index + ch.len_utf8();
+                out.push(&line[start..end]);
+                start = end;
             }
         }
-        if !chunk.trim().is_empty() {
-            chunks.push(chunk);
-        }
-        let kept: Vec<&str> = chunks
-            .iter()
-            .map(String::as_str)
-            .filter(|chunk| !is_worker_started_claim(chunk))
-            .collect();
-        let joined = kept.join(" ");
-        let joined = joined.trim().to_string();
-        if !joined.is_empty() {
-            kept_lines.push(joined);
-        }
+        out.push(&line[start..]);
     }
-    let suppressed = kept_lines.join("\n");
-    if suppressed.trim().is_empty() {
-        "No worker was started in this turn: no create_thread call ran.".to_string()
-    } else {
-        suppressed
+    out.into_iter()
+        .filter(|sentence| !sentence.trim().is_empty())
+        .collect()
+}
+
+/// True when one normalized sentence claims work was started in this reply.
+///
+/// `opening` marks the reply's first real sentence, where an action verb
+/// alone ("Installing the new bundle on r11.") is a claim; elsewhere the
+/// sentence must also say "now".
+fn is_dispatch_claim(sentence: &str, opening: bool) -> bool {
+    let padded = format!(" {sentence} ");
+    if sentence.ends_with('?') || NOT_CLAIMS.iter().any(|phrase| padded.contains(phrase)) {
+        return false;
     }
+    let says_now = ["for now", "by now", "until now", "as of now"]
+        .iter()
+        .fold(padded.clone(), |text, phrase| text.replace(phrase, " "))
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|word| word == "now");
+    let action = ["i'm ", "i am ", "we're ", "we are "]
+        .iter()
+        .find_map(|subject| sentence.strip_prefix(subject))
+        .unwrap_or(sentence);
+    let opens_with_action = ACTION_OPENERS.iter().any(|verb| {
+        action
+            .strip_prefix(verb)
+            .and_then(|rest| rest.strip_prefix(' '))
+            .and_then(|rest| rest.split_whitespace().next())
+            .is_some_and(|next| {
+                next.starts_with(|c: char| c.is_alphanumeric() || c == '`')
+                    && !STATUS_WORDS.contains(&next)
+            })
+    });
+    if opens_with_action && (opening || says_now) {
+        return true;
+    }
+    ["i've", "i have", "we've", "we have"]
+        .iter()
+        .flat_map(|subject| {
+            DONE_VERBS
+                .iter()
+                .map(move |verb| format!(" {subject} {verb} "))
+        })
+        .any(|phrase| padded.contains(&phrase))
+}
+
+/// True when `text` claims that work was started in this reply.
+fn has_dispatch_claim(text: &str) -> bool {
+    let mut opening = true;
+    for sentence in sentences(text) {
+        let normalized = normalize_sentence(sentence);
+        let body = strip_filler(&normalized);
+        if body.is_empty() {
+            continue;
+        }
+        if is_dispatch_claim(body, opening) {
+            return true;
+        }
+        opening = false;
+    }
+    false
 }
 
 /// Closes a turn early without an error: the loop guard stopped the model, and
@@ -1857,6 +1987,7 @@ async fn run_turn_inner(
             stream_state.turn,
             sender,
             initial_message_count,
+            offers_worker_dispatch(&setup.enabled_tools),
         ));
     }
 }
@@ -3204,34 +3335,22 @@ fn finalize_non_tool_turn(
     turn: AssistantTurnBuilder,
     sender: &EventSender,
     prior_message_count: usize,
+    offers_dispatch: bool,
 ) -> (String, Vec<ChatMessage>) {
     let mut finalized = turn.finalize();
-    // Phantom-worker guard: a worker is started only by a create_thread /
-    // send_thread_message call whose result returned a new thread id. When
-    // history shows no such dispatch, worker-started claims in the final
-    // text describe a worker that does not exist, so they are withheld
-    // instead of delivered and persisted. Legitimate confirmations (a
-    // dispatch exists in history) pass through unchanged.
-    let backed = has_worker_dispatch(messages);
-    let suppressed = suppress_unbacked_worker_claims(&finalized.final_text, backed);
-    if suppressed != finalized.final_text {
-        tracing::warn!("Withheld worker-started claim with no create_thread dispatch in history");
-        let text_at = finalized
-            .blocks
-            .iter()
-            .position(|block| matches!(block, ChatContentBlock::Text { .. }));
-        finalized
-            .blocks
-            .retain(|block| !matches!(block, ChatContentBlock::Text { .. }));
-        // Keep the replacement where the first text block was, so it stays
-        // ordered against any reasoning blocks around it.
-        let text_at = text_at
-            .unwrap_or(finalized.blocks.len())
-            .min(finalized.blocks.len());
-        finalized
-            .blocks
-            .insert(text_at, ChatContentBlock::text(suppressed.clone()));
-        finalized.final_text = suppressed;
+    // Phantom-dispatch guard: in a turn that can start workers, an answer
+    // that says work started while this turn made no dispatch call gets a
+    // correction appended. The model's text is kept as written.
+    if offers_dispatch
+        && !has_worker_dispatch(&messages[prior_message_count.min(messages.len())..])
+        && has_dispatch_claim(&finalized.final_text)
+    {
+        tracing::warn!(
+            "Answer claims work started, but this turn dispatched nothing; appended a correction"
+        );
+        let correction = format!("\n\n{UNBACKED_DISPATCH_CORRECTION}");
+        finalized.final_text.push_str(&correction);
+        finalized.blocks.push(ChatContentBlock::text(correction));
     }
     let final_text = finalized.final_text;
     emit_assistant_completed_if_present(sender, &final_text);
@@ -5349,60 +5468,184 @@ mod tests {
         assert!(!strip_invalid_images(&mut messages, &err));
     }
 
-    #[test]
-    fn worker_dispatch_requires_a_thread_id_result() {
-        let dispatched = vec![
+    /// A dispatch call and its result, as one turn records them.
+    fn dispatch_messages(tool: &str, result_json: &str) -> Vec<ChatMessage> {
+        vec![
             ChatMessage::assistant_blocks(vec![ChatContentBlock::tool_use(
                 "call-1",
-                "create_thread",
+                tool,
                 serde_json::json!({"prompt": "go"}),
             )]),
             ChatMessage::tool_results(vec![ToolResult {
                 tool_use_id: "call-1".to_string(),
-                content: ToolResultContent::Text(
-                    r#"{"ok":true,"data":{"thread_id":"w-1"}}"#.to_string(),
-                ),
+                content: ToolResultContent::Text(result_json.to_string()),
                 is_error: false,
             }]),
-        ];
-        assert!(has_worker_dispatch(&dispatched));
+        ]
+    }
 
-        let failed = vec![
-            ChatMessage::assistant_blocks(vec![ChatContentBlock::tool_use(
-                "call-1",
-                "create_thread",
-                serde_json::json!({"prompt": "go"}),
-            )]),
-            ChatMessage::tool_results(vec![ToolResult {
-                tool_use_id: "call-1".to_string(),
-                content: ToolResultContent::Text(
-                    r#"{"ok":false,"error":{"code":"create_thread_failed","message":"boom"}}"#
-                        .to_string(),
-                ),
-                is_error: true,
-            }]),
-        ];
+    /// Runs `finalize_non_tool_turn` on one text answer after `history`,
+    /// where `prior` messages came before this turn.
+    fn finalize_answer(
+        history: Vec<ChatMessage>,
+        prior: usize,
+        answer: &str,
+        offers_dispatch: bool,
+    ) -> String {
+        let mut turn = AssistantTurnBuilder::new(String::new());
+        turn.ensure_text_part_mut(0).text = answer.to_string();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+        let mut messages = history;
+        let (final_text, messages) =
+            finalize_non_tool_turn(&mut messages, turn, &sender, prior, offers_dispatch);
+        let persisted: String = match &messages.last().expect("assistant message").content {
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ChatContentBlock::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            MessageContent::Text(text) => text.clone(),
+        };
+        assert_eq!(persisted, final_text, "persisted text matches final text");
+        final_text
+    }
+
+    #[test]
+    fn worker_dispatch_requires_a_thread_id_result() {
+        assert!(has_worker_dispatch(&dispatch_messages(
+            "Create_Thread",
+            r#"{"ok":true,"data":{"thread_id":"w-1"}}"#,
+        )));
+        assert!(has_worker_dispatch(&dispatch_messages(
+            "send_thread_message",
+            r#"{"ok":true,"data":{"worker":{"thread_id":"w-1"}}}"#,
+        )));
+        assert!(has_worker_dispatch(&dispatch_messages(
+            "Invoke_Subagent",
+            r#"{"ok":true,"data":{"result":"done","child_thread_id":"c-1"}}"#,
+        )));
+
+        let mut failed = dispatch_messages(
+            "create_thread",
+            r#"{"ok":false,"error":{"code":"create_thread_failed","message":"boom"}}"#,
+        );
+        if let MessageContent::Blocks(blocks) = &mut failed[1].content
+            && let ChatContentBlock::ToolResult(result) = &mut blocks[0]
+        {
+            result.is_error = true;
+        }
         assert!(!has_worker_dispatch(&failed));
         assert!(!has_worker_dispatch(&[ChatMessage::user("hi")]));
     }
 
     #[test]
-    fn unbacked_worker_claims_are_withheld_but_backed_ones_pass() {
-        let text = "I started a new worker to handle this. The screenshot was 10 MB.";
-        assert_eq!(
-            suppress_unbacked_worker_claims(text, false),
-            "The screenshot was 10 MB."
+    fn dispatch_claims_match_observed_phantom_answers() {
+        for claim in [
+            "**Making Odin the sessiond unit now.**\n\nWorker will check `compositor.toml`.",
+            "**Installing the new bundle on r11.**\n\n**What's in it**:\n1. Shell socket",
+            "**Retrying the Odin sessiond-unit worker now.**\n\nFresh thread (previous one died).",
+            "**Retrying with a fresh worker now.**",
+            "**Remoting the new release.**\n\nWorker will build the release on namespace.",
+            "**On it — starting `powerd` + `appd` in the kit session.**",
+            "**Fixing CreateClient slots now.**",
+            "I've started a new worker to handle this. The screenshot was 10 MB.",
+            "I'm retrying the remote build now.",
+        ] {
+            assert!(has_dispatch_claim(claim), "should be a claim: {claim}");
+        }
+        for not_claim in [
+            "No worker was started yet.",
+            "**Yes — the remote build is already running.**",
+            "**Not sure — likely not running yet.** The retry worker hasn't reported back.",
+            "**Handling parallel app packing:** split the 9 apps across boxes.",
+            "Worker `3c8c6b54` started at 20:22 and is still building on box n53u.",
+            "I can start a fresh worker for it if you want.",
+            "**Running for 41 min — in the package build stage.**",
+            "**Install done and verified — then replaced by another worker's install.**",
+            "The investigation worker I started is tracing that path.",
+            "**No. It's a stopgap.** Making it the default is okay for now because Odin is validated.",
+            "- The transcript has text saying a worker started, but zero new thread ids.",
+            "**Exactly.** The pinned image covers the whole build. Running it now would take 40 min? No.",
+        ] {
+            assert!(
+                !has_dispatch_claim(not_claim),
+                "should not be a claim: {not_claim}"
+            );
+        }
+    }
+
+    #[test]
+    fn unbacked_claim_in_a_long_orchestrator_thread_gets_a_correction() {
+        // An older turn dispatched a worker; this turn dispatched nothing.
+        let mut history = vec![ChatMessage::user("Build the image")];
+        history.extend(dispatch_messages(
+            "create_thread",
+            r#"{"ok":true,"data":{"thread_id":"w-1"}}"#,
+        ));
+        history.push(ChatMessage::assistant_blocks(vec![ChatContentBlock::text(
+            "Started the image worker.",
+        )]));
+        history.push(ChatMessage::user("Make Odin the sessiond unit"));
+        assert!(
+            has_worker_dispatch(&history),
+            "the whole thread has a dispatch"
         );
-        assert_eq!(suppress_unbacked_worker_claims(text, true), text);
+        let prior = history.len();
+
+        let answer = "**Making Odin the sessiond unit now.**\n\n## Plan\n\nWorker will  check it.";
+        let final_text = finalize_answer(history, prior, answer, true);
         assert_eq!(
-            suppress_unbacked_worker_claims("I started a fresh worker.", false),
-            "No worker was started in this turn: no create_thread call ran."
+            final_text,
+            format!("{answer}\n\n{UNBACKED_DISPATCH_CORRECTION}"),
+            "the model's text is kept byte for byte, then the correction"
         );
-        // Negations and discussion are not claims.
-        assert_eq!(
-            suppress_unbacked_worker_claims("No worker was started yet.", false),
-            "No worker was started yet."
-        );
+    }
+
+    #[test]
+    fn dispatch_in_this_turn_backs_the_claim() {
+        let mut history = vec![ChatMessage::user("Make Odin the sessiond unit")];
+        let prior = history.len();
+        history.extend(dispatch_messages(
+            "create_thread",
+            r#"{"ok":true,"data":{"thread_id":"w-2"}}"#,
+        ));
+        let answer = "**Making Odin the sessiond unit now.**";
+        assert_eq!(finalize_answer(history, prior, answer, true), answer);
+    }
+
+    #[test]
+    fn invoke_subagent_backs_a_subagent_claim() {
+        let mut history = vec![ChatMessage::user("Review this")];
+        let prior = history.len();
+        history.extend(dispatch_messages(
+            "invoke_subagent",
+            r#"{"ok":true,"data":{"result":"done","child_thread_id":"c-1"}}"#,
+        ));
+        let answer = "I've started a subagent to review it. It found 2 issues.";
+        assert_eq!(finalize_answer(history, prior, answer, true), answer);
+    }
+
+    #[test]
+    fn turns_without_create_thread_are_left_untouched() {
+        // Worker, helper, and job turns do not offer create_thread: their
+        // reports about other threads' work are never rewritten.
+        let history = vec![ChatMessage::user("Is it still installing?")];
+        let prior = history.len();
+        let answer = "No.  Nothing is installing on r11 now.\n**Install worker**\n- Worker \
+                      `3c8c6b54` is still running.\n\n**Retrying the build now.** I've started a \
+                      new worker.";
+        assert_eq!(finalize_answer(history, prior, answer, false), answer);
+
+        let mut tools: HashSet<String> = ["bash", "read", "Invoke_Subagent"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert!(!offers_worker_dispatch(&tools));
+        tools.insert("Create_Thread".to_string());
+        assert!(offers_worker_dispatch(&tools));
     }
 
     #[test]

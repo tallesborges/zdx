@@ -312,6 +312,19 @@ pub fn record_user_input(
     Ok(())
 }
 
+/// Adds `note` as the last text block of the live input message only. The
+/// thread file keeps the message as recorded, so replay never shows the note
+/// as current again.
+pub fn append_live_note(message: &mut ChatMessage, note: &str) {
+    let content = std::mem::replace(&mut message.content, MessageContent::Blocks(Vec::new()));
+    let mut blocks = match content {
+        MessageContent::Text(text) => vec![ChatContentBlock::text(text)],
+        MessageContent::Blocks(blocks) => blocks,
+    };
+    blocks.push(ChatContentBlock::text(note));
+    message.content = MessageContent::Blocks(blocks);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

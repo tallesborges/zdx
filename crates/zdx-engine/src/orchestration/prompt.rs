@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use super::protocol::Route;
 use crate::config::Config;
 use crate::core::context::{PromptContextInclusion, RuntimeContext};
+use crate::core::workers::{WorkerSnapshot, WorkerStatus};
 use crate::subagents::{self, ORCHESTRATOR_SUBAGENT_NAME, SubagentDefinition};
 
 /// A persistent-profile turn ready to run.
@@ -323,6 +324,77 @@ fn load_orchestrator_overlay(path: &Path) -> Option<String> {
     }
 }
 
+/// Most workers one live list shows. Running and queued workers come first.
+const MAX_LIVE_WORKERS: usize = 20;
+
+/// The live worker list an orchestrator turn gets with its input: each
+/// worker this thread owns, with the status the engine holds for it at
+/// `as_of`. `title_of` reads a worker's title.
+///
+/// It goes to the live turn only, never to the thread file, so a later turn
+/// never reads it as current.
+#[must_use]
+pub fn live_workers_note(
+    workers: &[WorkerSnapshot],
+    title_of: impl Fn(&str) -> Option<String>,
+    as_of: &str,
+) -> String {
+    let mut out = format!(
+        "<live_workers>\nThe engine's status for this thread's workers at {as_of}, when this turn \
+         started. It replaces any worker status in earlier messages and tool results. Call \
+         get_thread_status for anything newer. Workers the engine has not tracked since it \
+         last started are not listed.\n"
+    );
+    if workers.is_empty() {
+        out.push_str("No workers are tracked for this thread.\n");
+    }
+    let (active, settled): (Vec<&WorkerSnapshot>, Vec<&WorkerSnapshot>) = workers
+        .iter()
+        .partition(|worker| matches!(worker.status, WorkerStatus::Running | WorkerStatus::Queued));
+    for worker in active.iter().chain(settled.iter()).take(MAX_LIVE_WORKERS) {
+        let _ = write!(out, "- `{}`", worker.thread_id);
+        if let Some(title) = title_of(&worker.thread_id) {
+            let _ = write!(out, " \"{title}\"");
+        }
+        let _ = write!(out, ": {}", worker.status.as_str());
+        if let Some(elapsed) = worker.turn_elapsed_seconds {
+            let _ = write!(out, " for {}", format_duration(elapsed));
+        }
+        if let Some(tool) = &worker.current_tool {
+            let _ = write!(out, ", running tool `{tool}`");
+        }
+        if let Some(idle) = worker.seconds_since_last_activity {
+            let _ = write!(out, ", last activity {} ago", format_duration(idle));
+        }
+        if worker.queue_depth > 0 {
+            let _ = write!(out, ", {} queued prompt(s)", worker.queue_depth);
+        }
+        if worker.status == WorkerStatus::Failed
+            && let Some(error) = &worker.last_error
+        {
+            let _ = write!(out, ", error: {}", truncate_description(error, 160));
+        }
+        out.push('\n');
+    }
+    if workers.len() > MAX_LIVE_WORKERS {
+        let _ = writeln!(
+            out,
+            "{} older workers are not listed.",
+            workers.len() - MAX_LIVE_WORKERS
+        );
+    }
+    out.push_str("</live_workers>");
+    out
+}
+
+fn format_duration(seconds: u64) -> String {
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m", seconds / 60),
+        _ => format!("{}h{:02}m", seconds / 3600, seconds % 3600 / 60),
+    }
+}
+
 fn shorten_home(path: &str, home: &str) -> String {
     if !home.is_empty() && path.starts_with(home) {
         format!("~{}", &path[home.len()..])
@@ -355,6 +427,73 @@ mod tests {
             agents_project: false,
         };
         config
+    }
+
+    fn worker(id: &str, status: WorkerStatus) -> WorkerSnapshot {
+        WorkerSnapshot {
+            thread_id: id.to_string(),
+            owner_thread_id: "owner".to_string(),
+            root: PathBuf::from("/tmp"),
+            status,
+            queue_depth: 0,
+            queue: Vec::new(),
+            latest_final_text: None,
+            last_error: None,
+            mirror_url: None,
+            mirror: None,
+            current_tool: None,
+            current_tool_input: None,
+            seconds_since_last_activity: None,
+            turn_elapsed_seconds: None,
+            steers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn live_workers_note_lists_active_workers_first_with_live_detail() {
+        let done = worker("w-done", WorkerStatus::Completed);
+        let mut failed = worker("w-failed", WorkerStatus::Failed);
+        failed.last_error = Some("provider rejected the request".to_string());
+        let mut running = worker("w-running", WorkerStatus::Running);
+        running.turn_elapsed_seconds = Some(9_120);
+        running.current_tool = Some("bash".to_string());
+        running.seconds_since_last_activity = Some(12);
+        running.queue_depth = 1;
+        let note = live_workers_note(
+            &[done, failed, running],
+            |id| (id == "w-running").then(|| "Build pinned toolchain image".to_string()),
+            "2026-11-18T22:54:38Z",
+        );
+        let lines: Vec<&str> = note.lines().collect();
+        assert_eq!(lines[0], "<live_workers>");
+        assert!(lines[1].contains("2026-11-18T22:54:38Z"));
+        assert!(lines[1].contains("replaces any worker status in earlier messages"));
+        assert_eq!(
+            &lines[2..],
+            [
+                "- `w-running` \"Build pinned toolchain image\": running for 2h32m, running tool \
+                 `bash`, last activity 12s ago, 1 queued prompt(s)",
+                "- `w-done`: completed",
+                "- `w-failed`: failed, error: provider rejected the request",
+                "</live_workers>",
+            ]
+        );
+    }
+
+    #[test]
+    fn live_workers_note_says_when_no_worker_is_tracked_and_caps_the_list() {
+        let empty = live_workers_note(&[], |_| None, "now");
+        assert!(empty.contains("\nNo workers are tracked for this thread.\n</live_workers>"));
+
+        let many: Vec<WorkerSnapshot> = (0..MAX_LIVE_WORKERS + 3)
+            .map(|index| worker(&format!("w-{index}"), WorkerStatus::Completed))
+            .collect();
+        let note = live_workers_note(&many, |_| None, "now");
+        assert_eq!(
+            note.lines().filter(|line| line.starts_with("- ")).count(),
+            MAX_LIVE_WORKERS
+        );
+        assert!(note.contains("\n3 older workers are not listed.\n"));
     }
 
     #[test]

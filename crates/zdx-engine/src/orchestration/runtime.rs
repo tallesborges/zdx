@@ -30,7 +30,7 @@ use super::protocol::{
     ThreadState, ThreadStatus, TurnKind,
 };
 use super::thread_ops::{coded, validate_thread_id};
-use super::updates::{InputImage, record_user_input, worker_update_prompt};
+use super::updates::{InputImage, append_live_note, record_user_input, worker_update_prompt};
 use crate::config::{Config, TextVerbosity, paths};
 use crate::core::agent::{
     self, AgentEventRx, AgentEventTx, AgentOptions, ToolConfig, ToolSelection, create_event_channel,
@@ -39,7 +39,7 @@ use crate::core::events::{AgentEvent, ErrorKind, TurnStatus};
 use crate::core::steer::{SOURCE_USER, SOURCE_WORKER_UPDATE, SteerInbox, SteerItem, SteerSource};
 use crate::core::thread_lease::ThreadRunLease;
 use crate::core::thread_persistence::{self, Thread};
-use crate::core::workers::{WorkerEvent, WorkerManager};
+use crate::core::workers::{WorkerEvent, WorkerManager, WorkerSnapshot};
 use crate::subagents::{self, ORCHESTRATOR_SUBAGENT_NAME};
 use crate::tools::ToolRegistry;
 use crate::tools::orchestrator::OrchestratorTool;
@@ -87,6 +87,9 @@ pub struct TurnRequest {
     pub cancel: CancellationToken,
     /// Tool registry with the thread-control tools bound to the live workers.
     pub registry: ToolRegistry,
+    /// The thread's workers as the engine holds them when the turn starts;
+    /// empty for ordinary threads.
+    pub workers: Vec<WorkerSnapshot>,
     /// Steers for this turn (user messages, worker updates), taken at safe
     /// points. Unread ones go back to the queue when the turn ends.
     pub steer: SteerInbox,
@@ -1439,6 +1442,11 @@ impl Engine {
             events,
             cancel,
             registry: self.registry.clone(),
+            workers: if ordinary {
+                Vec::new()
+            } else {
+                self.workers.list_for_owner(thread_id)
+            },
             steer,
             run_lease,
         });
@@ -1972,6 +1980,7 @@ async fn run_profile_turn(request: TurnRequest) {
         events,
         cancel,
         registry,
+        workers,
         steer,
         run_lease,
     } = request;
@@ -1981,6 +1990,7 @@ async fn run_profile_turn(request: TurnRequest) {
         route,
         text,
         &images,
+        &workers,
         run_lease,
     ) {
         Ok(prepared) => prepared,
@@ -2090,6 +2100,7 @@ async fn run_ordinary_turn(request: TurnRequest) {
         events,
         cancel,
         registry: _,
+        workers: _,
         steer,
         run_lease,
     } = request;
@@ -2265,6 +2276,7 @@ fn prepare_profile_turn(
     route: Option<Route>,
     text: String,
     images: &[InputImage],
+    workers: &[WorkerSnapshot],
     run_lease: Option<Arc<ThreadRunLease>>,
 ) -> Result<ReadyTurn> {
     let run_lease = lease_for_turn(thread_id, run_lease)?;
@@ -2315,6 +2327,21 @@ fn prepare_profile_turn(
         record_failure(&mut thread, err);
     }
     let prepared = prepared?;
+    // A turn that can start workers sees their live status with its input,
+    // so it never answers from an older tool result.
+    if prepared
+        .tools
+        .iter()
+        .any(|tool| tool.eq_ignore_ascii_case("create_thread"))
+        && let Some(input) = messages.last_mut()
+    {
+        let note = super::prompt::live_workers_note(
+            workers,
+            |id| thread_persistence::read_thread_title(id).ok().flatten(),
+            &chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        );
+        append_live_note(input, &note);
+    }
     Ok(ReadyTurn {
         run_lease,
         config: prepared.config,
@@ -2337,6 +2364,81 @@ mod tests {
 
     /// Texts each fake turn received, in run order.
     type Seen = Arc<StdMutex<Vec<String>>>;
+
+    /// An orchestrator turn sees its workers' live status with its input; the
+    /// thread file keeps only what the user sent.
+    #[test]
+    fn an_orchestrator_turn_gets_the_live_worker_list_on_its_input_only() {
+        let home = crate::test_support::temp_zdx_home();
+        let root = home.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut thread = Thread::with_id("orch".to_string()).unwrap();
+        thread
+            .set_persistent_profile(ORCHESTRATOR_SUBAGENT_NAME)
+            .unwrap();
+        let live = vec![WorkerSnapshot {
+            thread_id: "w-live".to_string(),
+            owner_thread_id: "orch".to_string(),
+            root: root.clone(),
+            status: crate::core::workers::WorkerStatus::Running,
+            queue_depth: 0,
+            queue: Vec::new(),
+            latest_final_text: None,
+            last_error: None,
+            mirror_url: None,
+            mirror: None,
+            current_tool: Some("bash".to_string()),
+            current_tool_input: None,
+            seconds_since_last_activity: Some(3),
+            turn_elapsed_seconds: Some(70),
+            steers: Vec::new(),
+        }];
+
+        let ready = prepare_profile_turn(
+            "orch",
+            &root,
+            None,
+            "is it running?".into(),
+            &[],
+            &live,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("prepare: {err:#}"));
+
+        let crate::providers::MessageContent::Blocks(blocks) =
+            &ready.messages.last().expect("input").content
+        else {
+            panic!("the input carries the note as a second block");
+        };
+        let texts: Vec<&str> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                crate::providers::ChatContentBlock::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts[0], "is it running?");
+        assert!(texts[1].starts_with("<live_workers>"), "{}", texts[1]);
+        assert!(
+            texts[1].contains("- `w-live`: running for 1m, running tool `bash`"),
+            "{}",
+            texts[1]
+        );
+
+        let recorded: Vec<String> = Thread::with_id("orch".to_string())
+            .unwrap()
+            .read_events()
+            .unwrap()
+            .into_iter()
+            .filter_map(|event| match event {
+                thread_persistence::ThreadEvent::Message { role, text, .. } if role == "user" => {
+                    Some(text)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recorded, ["is it running?"]);
+    }
 
     /// A turn that cannot start keeps the message and saves why, after it.
     #[test]

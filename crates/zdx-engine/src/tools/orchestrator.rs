@@ -129,7 +129,7 @@ fn definition_for(op: Op) -> ToolDefinition {
     match op {
         Op::Create => ToolDefinition {
             name: "Create_Thread".to_string(),
-            description: "Create a new worker thread in an existing project directory and queue its first prompt. Returns the worker thread_id while the worker runs in the background; its history stays available through the link added to your reply. You are notified automatically when its turn finishes. The worker already has the project's AGENTS.md rules, skills, and memory. Put the user's words under `User request:` and only what the worker cannot know under `Orchestrator notes:`. Do not rewrite the request into a specification.".to_string(),
+            description: "Create a new worker thread in an existing project directory and queue its first prompt. Returns the worker thread_id while the worker runs in the background; its history stays available through the link added to your reply. You are notified automatically when its turn finishes. The returned `worker` block is a snapshot taken at creation (usually `queued`) and never updates: for current status use this turn's live worker list or Get_Thread_Status. The worker already has the project's AGENTS.md rules, skills, and memory. Put the user's words under `User request:` and only what the worker cannot know under `Orchestrator notes:`. Do not rewrite the request into a specification.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -479,6 +479,7 @@ fn create_thread(
             "root": root.display().to_string(),
             "root_source": root_source,
             "worker": snapshot_json(&snapshot),
+            "worker_snapshot": CREATION_SNAPSHOT_NOTE,
         })),
         None => ToolOutput::success(json!({
             "thread_id": worker_id,
@@ -487,6 +488,11 @@ fn create_thread(
         })),
     }
 }
+
+/// Labels the `worker` block of a `create_thread` result: it shows the
+/// worker at creation and goes stale as soon as the worker starts.
+const CREATION_SNAPSHOT_NOTE: &str = "Status at creation. It does not update. For current status, \
+     use this turn's live worker list or Get_Thread_Status.";
 
 /// Starts a worker prompt with a line that names the orchestrator thread that
 /// sent it. The body is the orchestrator's own text, so the line claims only
